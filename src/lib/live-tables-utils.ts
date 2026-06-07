@@ -69,7 +69,31 @@ export function tableSeatCount(table: LiveCanvasTable): number {
 }
 
 export function isTableBookable(table: LiveCanvasTable): boolean {
-  return table.status === 'free';
+  return table.status === 'free' && !table.isDisabled;
+}
+
+export function isTableDisabled(table: LiveCanvasTable): boolean {
+  return table.isDisabled === true;
+}
+
+export function findCanvasTableForMasterId(
+  floors: LiveFloorState[],
+  masterTableId: number
+): { canvasTableId: string; label: string; floorId: string } | null {
+  for (const floor of floors) {
+    for (const table of floor.tables) {
+      if (table.sourceTableId === masterTableId) {
+        return { canvasTableId: table.id, label: table.label, floorId: floor.id };
+      }
+      const mergedPart = table.mergedParts?.find(
+        (part) => part.sourceTableId === masterTableId
+      );
+      if (mergedPart) {
+        return { canvasTableId: table.id, label: table.label, floorId: floor.id };
+      }
+    }
+  }
+  return null;
 }
 
 export function resolveBookingTableId(table: LiveCanvasTable): number | null {

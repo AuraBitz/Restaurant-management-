@@ -1,4 +1,35 @@
-import type { MenuCategoryRow, RestaurantThaliRow } from '../types/menu';
+import type { MenuCategoryRow, MenuItemRow, RestaurantThaliRow } from '../types/menu';
+
+export function normalizeAvailableStatus(
+  value?: string | null
+): 'available' | 'not_available' {
+  return value === 'not_available' ? 'not_available' : 'available';
+}
+
+export function isMenuItemAvailable(
+  item: MenuItemRow,
+  category?: MenuCategoryRow
+): boolean {
+  if (normalizeAvailableStatus(category?.available_status) === 'not_available') {
+    return false;
+  }
+  return normalizeAvailableStatus(item.available_status) === 'available';
+}
+
+export function withCategoryAvailability(category: MenuCategoryRow): MenuCategoryRow {
+  const categoryUnavailable =
+    normalizeAvailableStatus(category.available_status) === 'not_available';
+
+  return {
+    ...category,
+    items: (category.items ?? []).map((item) => ({
+      ...item,
+      available_status: categoryUnavailable
+        ? 'not_available'
+        : normalizeAvailableStatus(item.available_status),
+    })),
+  };
+}
 
 export function parseMenuCategories(raw: unknown): MenuCategoryRow[] {
   if (Array.isArray(raw)) return raw as MenuCategoryRow[];

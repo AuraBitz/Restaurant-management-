@@ -6,20 +6,19 @@ import Header from '../../components/layout/Header';
 import Footer from '../../components/layout/Footer';
 import LiveFloorCanvas from '../../components/restaurant/LiveFloorCanvas';
 import RestaurantThaliMenuContent from '../../components/restaurant/RestaurantThaliMenuContent';
-import { getActiveBookingSession } from '../../lib/active-booking-session';
+import { getActiveBookingSession, patchActiveBookingSession } from '../../lib/active-booking-session';
 import { mapRestaurantRow } from '../../lib/map-restaurant';
+import { buildMenuItemMap, resolveOrderContext } from '../../lib/order-cart-utils';
+import { resolveWaiterCallContext } from '../../lib/resolve-waiter-call-context';
 import { useLiveTableMatrixPoll } from '../../hooks/use-live-table-matrix-poll';
+import { useRestaurantOrder } from '../../hooks/use-restaurant-order';
 import { getPublicRestaurantById } from '../../services/api/restaurant.api';
+import { createPublicCallWaiter } from '../../services/api/call-waiter.api';
+import { getPublicRestaurantMenus } from '../../services/api/menu.api';
+import { getPublicBookingById } from '../../services/api/booking.api';
 import type { LiveFloorState } from '../../types/live-tables';
 import type { RestaurantListItem } from '../../types/restaurant';
-
-interface CartItem {
-  name: string;
-  price: number;
-  quantity: number;
-  veg: boolean;
-  image?: string;
-}
+import type { RestaurantThaliRow } from '../../types/menu';
 
 const CurrentRestaurant: React.FC = () => {
   const session = useMemo(() => getActiveBookingSession(), []);
@@ -59,14 +58,90 @@ const CurrentRestaurant: React.FC = () => {
       })
       .finally(() => setPageLoading(false));
   }, [session]);
+  const [menuThalis, setMenuThalis] = useState<RestaurantThaliRow[]>([]);
+  const [resolvedCustomerId, setResolvedCustomerId] = useState<
+    number | null | undefined
+  >(session?.customerId ?? (session?.bookingIds?.length ? undefined : null));
+
+  useEffect(() => {
+    if (!session) return;
+    if (session.customerId) {
+      setResolvedCustomerId(session.customerId);
+      return;
+    }
+    const bookingId = session.bookingIds?.[0];
+    if (!bookingId) {
+      setResolvedCustomerId(null);
+      return;
+    }
+    let cancelled = false;
+    getPublicBookingById(bookingId)
+      .then((booking) => {
+        if (cancelled) return;
+        const id = booking?.customer_id ?? null;
+        setResolvedCustomerId(id);
+        if (id) {
+          patchActiveBookingSession({ customerId: id });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResolvedCustomerId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  const menuItemMap = useMemo(() => buildMenuItemMap(menuThalis), [menuThalis]);
+
+  const orderContext = useMemo(
+    () => (session ? resolveOrderContext(session, matrixData) : null),
+    [session, matrixData]
+  );
+
+  useEffect(() => {
+    if (!session?.restaurantId) return;
+    getPublicRestaurantMenus(session.restaurantId)
+      .then(setMenuThalis)
+      .catch(() => setMenuThalis([]));
+  }, [session?.restaurantId]);
+
+  const {
+    loading: orderLoading,
+    syncing: orderSyncing,
+    orderNumber,
+    cartItems,
+    addToCart,
+    updateQuantity,
+    removeFromCart,
+    placeOrder,
+    getCartTotal,
+    isPlaced,
+  } = useRestaurantOrder({
+    restaurantId: session?.restaurantId ?? 0,
+    tableId: orderContext?.tableId,
+    floorId: orderContext?.floorId,
+    customerId: resolvedCustomerId ?? null,
+    bookingId: session?.bookingIds?.[0] ?? null,
+    menuItemMap,
+    onCustomerLinked: (id) => {
+      setResolvedCustomerId(id);
+      patchActiveBookingSession({ customerId: id });
+    },
+    enabled: Boolean(
+      session &&
+        orderContext?.tableId &&
+        orderContext?.floorId &&
+        (resolvedCustomerId !== undefined || session.bookingIds?.length)
+    ),
+  });
+
   const [showMenu, setShowMenu] = useState(false);
   const [showBill, setShowBill] = useState(false);
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [callingWaiter, setCallingWaiter] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [voiceText, setVoiceText] = useState('');
   const [recognition, setRecognition] = useState<any>(null);
-  const [orderedItems, setOrderedItems] = useState<CartItem[]>([]);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('cash');
   const [showThankYou, setShowThankYou] = useState(false);
@@ -77,68 +152,13 @@ const CurrentRestaurant: React.FC = () => {
   const [, setScanning] = useState(false);
   const [rating, setRating] = useState(0);
   const [feedbackText, setFeedbackText] = useState('');
-  const addToCart = (item: { name: string; price: number; veg: boolean; image?: string }) => {
-    const existingItem = cartItems.find(cartItem => cartItem.name === item.name);
-    
-    if (existingItem) {
-      setCartItems(cartItems.map(cartItem =>
-        cartItem.name === item.name
-          ? { ...cartItem, quantity: cartItem.quantity + 1 }
-          : cartItem
-      ));
-      toast.success(`${item.name} quantity increased!`, { autoClose: 1500 });
-    } else {
-      setCartItems([...cartItems, { ...item, quantity: 1 }]);
-      toast.success(`${item.name} added to cart!`, { autoClose: 1500 });
-    }
-  };
-
-  const updateQuantity = (itemName: string, change: number) => {
-    setCartItems(cartItems.map(item =>
-      item.name === itemName
-        ? { ...item, quantity: Math.max(1, item.quantity + change) }
-        : item
-    ));
-  };
-
-  const removeFromCart = (itemName: string) => {
-    setCartItems(cartItems.filter(item => item.name !== itemName));
-    toast.info(`${itemName} removed from cart`, { autoClose: 1500 });
-  };
-
-  const getCartTotal = () => {
-    return cartItems.reduce((total, item) => total + (item.price * item.quantity), 0);
-  };
 
   const handlePlaceOrder = () => {
-    if (cartItems.length === 0) {
-      toast.error('Your cart is empty!', { autoClose: 2000 });
-      return;
-    }
-
-    // Add current cart items to ordered items
-    setOrderedItems(prev => [...prev, ...cartItems]);
-
-    // Show success message
-    toast.success('🎉 Your order has been sent to the kitchen!', {
-      position: 'top-center',
-      autoClose: 3000,
-    });
-
-    // Show order details
-    setTimeout(() => {
-      toast.info(`Order for ${cartItems.length} items • Total: ₹${getCartTotal() + Math.round(getCartTotal() * 0.05)}`, {
-        position: 'top-right',
-        autoClose: 4000,
-      });
-    }, 500);
-
-    // Clear cart
-    setCartItems([]);
+    void placeOrder();
   };
 
   const handlePaymentRequest = () => {
-    const totalAmount = orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0) + Math.round(orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0) * 0.05);
+    const totalAmount = getCartTotal() + Math.round(getCartTotal() * 0.05);
     
     setShowPaymentModal(false);
     
@@ -193,7 +213,6 @@ const CurrentRestaurant: React.FC = () => {
       setShowFeedback(false);
       setShowMenu(false);
       setShowBill(false);
-      setOrderedItems([]);
       setRating(0);
       setFeedbackText('');
       setShowScanPrompt(true);
@@ -303,9 +322,9 @@ const CurrentRestaurant: React.FC = () => {
     // Items
     doc.setFont('helvetica', 'normal');
     let yPos = 100;
-    const subtotal = orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0);
+    const subtotal = cartItems.reduce((total, item) => total + (item.price * item.quantity), 0);
     
-    orderedItems.forEach((item, idx) => {
+    cartItems.forEach((item, idx) => {
       if (yPos > 250) {
         doc.addPage();
         yPos = 20;
@@ -371,17 +390,64 @@ const CurrentRestaurant: React.FC = () => {
     toast.success('📥 Bill downloaded successfully!', { autoClose: 2000 });
   };
 
-  const handleCallWaiter = () => {
+  const handleCallWaiter = async () => {
+    if (!session) return;
+
+    const ctx = resolveWaiterCallContext(session, matrixData);
+    if (!ctx) {
+      toast.error('Table info not found. Please book your table again.');
+      return;
+    }
+
     setCallingWaiter(true);
-    toast.success('🔔 Waiter called! They will be with you shortly.', {
-      position: 'top-center',
-      autoClose: 3000,
-    });
-    
-    // Reset after 5 seconds
-    setTimeout(() => {
-      setCallingWaiter(false);
-    }, 5000);
+    try {
+      await createPublicCallWaiter({
+        restaurant_id: ctx.restaurant_id,
+        floor_id: ctx.floor_id,
+        table_id: ctx.table_id,
+        is_ring: true,
+        calling_text: null,
+      });
+      toast.success('🔔 Waiter called! They will be with you shortly.', {
+        position: 'top-center',
+        autoClose: 3000,
+      });
+    } catch {
+      toast.error('Failed to call waiter. Please try again.');
+    } finally {
+      setTimeout(() => {
+        setCallingWaiter(false);
+      }, 5000);
+    }
+  };
+
+  const sendVoiceMessageToWaiter = async (text: string) => {
+    if (!session) return;
+
+    const ctx = resolveWaiterCallContext(session, matrixData);
+    if (!ctx) {
+      toast.error('Table info not found. Please book your table again.');
+      return;
+    }
+
+    const message = text.trim();
+    if (!message) return;
+
+    try {
+      await createPublicCallWaiter({
+        restaurant_id: ctx.restaurant_id,
+        floor_id: ctx.floor_id,
+        table_id: ctx.table_id,
+        is_ring: false,
+        calling_text: message,
+      });
+      toast.success(`Message sent: "${message}"`, {
+        position: 'top-center',
+        autoClose: 3000,
+      });
+    } catch {
+      toast.error('Failed to send message to waiter.');
+    }
   };
 
   const toggleVoiceAssistant = () => {
@@ -489,17 +555,27 @@ const CurrentRestaurant: React.FC = () => {
   };
 
   const processVoiceCommand = (command: string) => {
-    // Process different voice commands
-    if (command.includes('menu') || command.includes('open menu')) {
+    const normalized = command.toLowerCase().trim();
+
+    if (normalized.includes('menu') || normalized.includes('open menu')) {
       setShowMenu(true);
       toast.success('🍽️ Opening menu for you!', { autoClose: 2000 });
-    } else if (command.includes('call waiter') || command.includes('waiter')) {
-      handleCallWaiter();
-    } else if (command.includes('help')) {
-      toast.info('You can say: "Open Menu", "Call Waiter", "Show Tables"', {
+      return;
+    }
+
+    if (normalized.includes('call waiter') || normalized.includes('waiter')) {
+      void handleCallWaiter();
+      return;
+    }
+
+    if (normalized.includes('help')) {
+      toast.info('You can say: "Open Menu", "Call Waiter", or any request like "Bring water"', {
         autoClose: 4000,
       });
+      return;
     }
+
+    void sendVoiceMessageToWaiter(command);
   };
 
   // Auto-close welcome modal after 4 seconds
@@ -871,10 +947,13 @@ const CurrentRestaurant: React.FC = () => {
                   <h2 className="text-3xl font-bold mb-2">
                     {showBill ? '🧾 Your Bill' : '🍽️ Restaurant Menu'}
                   </h2>
-                  <p className="text-orange-100">{restaurant.name}</p>
+                  <p className="text-orange-100">
+                    {restaurant.name}
+                    {orderNumber != null ? ` · Order #${orderNumber}` : ''}
+                  </p>
                 </div>
                 <div className="flex items-center gap-3">
-                  {!showBill && orderedItems.length > 0 && (
+                  {!showBill && isPlaced && cartItems.length > 0 && (
                     <button
                       onClick={() => setShowBill(true)}
                       className="bg-white text-orange-600 px-4 py-2 rounded-lg font-bold hover:bg-orange-50 transition shadow-lg flex items-center gap-2"
@@ -882,7 +961,7 @@ const CurrentRestaurant: React.FC = () => {
                       <span className="text-xl">🧾</span>
                       <span>View Bill</span>
                       <span className="bg-orange-600 text-white px-2 py-0.5 rounded-full text-xs">
-                        {orderedItems.length}
+                        {cartItems.length}
                       </span>
                     </button>
                   )}
@@ -916,7 +995,11 @@ const CurrentRestaurant: React.FC = () => {
                 <div className="lg:col-span-2 border-r border-gray-200 flex flex-col overflow-hidden">
                   <RestaurantThaliMenuContent
                     restaurantId={session.restaurantId}
-                    onAddToCart={(item) => addToCart(item)}
+                    orderBusy={orderSyncing}
+                    orderLocked={isPlaced}
+                    onAddToCart={(item) => {
+                      addToCart(item);
+                    }}
                   />
                 </div>
 
@@ -925,25 +1008,33 @@ const CurrentRestaurant: React.FC = () => {
                 <div className="p-6 flex flex-col h-full">
                   <h3 className="text-2xl font-bold text-gray-800 mb-4 flex items-center gap-2 flex-shrink-0">
                     🛒 Your Order
+                    {orderNumber != null && (
+                      <span className="text-sm font-semibold text-orange-700">#{orderNumber}</span>
+                    )}
                     {cartItems.length > 0 && (
                       <span className="bg-orange-600 text-white text-sm px-2 py-1 rounded-full">
-                        {cartItems.length}
+                        {cartItems.reduce((sum, item) => sum + item.quantity, 0)}
                       </span>
+                    )}
+                    {orderSyncing && (
+                      <span className="text-xs font-normal text-orange-700">Submitting…</span>
                     )}
                   </h3>
 
-                  {cartItems.length === 0 ? (
+                  {orderLoading ? (
+                    <div className="text-center py-12 text-gray-500">Loading your order…</div>
+                  ) : cartItems.length === 0 ? (
                     <div className="text-center py-12">
                       <div className="text-6xl mb-4">🍽️</div>
                       <p className="text-gray-600 font-semibold mb-2">Your cart is empty</p>
-                      <p className="text-gray-500 text-sm">Add items from the menu to get started</p>
+                      <p className="text-gray-500 text-sm">Select dishes from menu, then tap Submit Order</p>
                     </div>
                   ) : (
                     <div className="space-y-4 flex flex-col flex-1 overflow-hidden">
                       {/* Cart Items */}
                       <div className="space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                        {cartItems.map((item, idx) => (
-                          <div key={idx} className="bg-white rounded-lg p-3 shadow border border-orange-200">
+                        {cartItems.map((item) => (
+                          <div key={item.id} className="bg-white rounded-lg p-3 shadow border border-orange-200">
                             <div className="flex items-start gap-3">
                               {item.image && (
                                 <img 
@@ -962,8 +1053,9 @@ const CurrentRestaurant: React.FC = () => {
                                     <p className="text-orange-600 font-bold text-sm mt-1">₹{item.price}</p>
                                   </div>
                                   <button
-                                    onClick={() => removeFromCart(item.name)}
-                                    className="text-red-500 hover:text-red-700 transition"
+                                    onClick={() => removeFromCart(item.id)}
+                                    disabled={isPlaced}
+                                    className="text-red-500 hover:text-red-700 transition disabled:opacity-40"
                                   >
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -975,15 +1067,17 @@ const CurrentRestaurant: React.FC = () => {
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-2 bg-orange-100 rounded-full px-2 py-1">
                                     <button
-                                      onClick={() => updateQuantity(item.name, -1)}
-                                      className="w-6 h-6 rounded-full bg-white hover:bg-orange-200 transition flex items-center justify-center font-bold"
+                                      onClick={() => updateQuantity(item.id, -1)}
+                                      disabled={isPlaced}
+                                      className="w-6 h-6 rounded-full bg-white hover:bg-orange-200 transition flex items-center justify-center font-bold disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                       -
                                     </button>
                                     <span className="font-bold text-sm px-2">{item.quantity}</span>
                                     <button
-                                      onClick={() => updateQuantity(item.name, 1)}
-                                      className="w-6 h-6 rounded-full bg-white hover:bg-orange-200 transition flex items-center justify-center font-bold"
+                                      onClick={() => updateQuantity(item.id, 1)}
+                                      disabled={orderSyncing}
+                                      className="w-6 h-6 rounded-full bg-white hover:bg-orange-200 transition flex items-center justify-center font-bold disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                       +
                                     </button>
@@ -1019,28 +1113,21 @@ const CurrentRestaurant: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Place Order Button */}
+                      {/* Submit Order Button */}
                       <button 
                         onClick={handlePlaceOrder}
-                        className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700 transition shadow-lg flex-shrink-0"
+                        disabled={orderSyncing || isPlaced}
+                        className="w-full bg-orange-600 text-white py-3 rounded-lg font-bold hover:bg-orange-700 transition shadow-lg flex-shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        Place Order • ₹{getCartTotal() + Math.round(getCartTotal() * 0.05)}
+                        {orderSyncing
+                          ? 'Submitting…'
+                          : isPlaced
+                          ? 'Order sent to kitchen'
+                          : `Submit Order • ₹${getCartTotal() + Math.round(getCartTotal() * 0.05)}`}
                       </button>
                     </div>
                   )}
                 </div>
-              </div>
-            </div>
-
-            {/* Menu Footer */}
-            <div className="bg-gradient-to-r from-orange-50 to-orange-100 p-6 rounded-b-2xl border-t border-orange-200 flex-shrink-0">
-              <div className="text-center">
-                <p className="text-gray-700 text-sm font-semibold mb-2">
-                  🟢 Vegetarian | 🔴 Non-Vegetarian | ⭐ Top Dishes (Most Ordered)
-                </p>
-                <p className="text-gray-600 text-xs">
-                  All prices are inclusive of taxes • Images are for representation purposes only
-                </p>
               </div>
             </div>
               </>
@@ -1084,8 +1171,8 @@ const CurrentRestaurant: React.FC = () => {
                         </div>
                       </div>
 
-                      {orderedItems.map((item, idx) => (
-                        <div key={idx} className="grid grid-cols-12 gap-2 py-2 border-b border-gray-200">
+                      {cartItems.map((item, idx) => (
+                        <div key={item.id} className="grid grid-cols-12 gap-2 py-2 border-b border-gray-200">
                           <div className="col-span-1 text-gray-600">{idx + 1}</div>
                           <div className="col-span-5">
                             <div className="flex items-center gap-2">
@@ -1105,17 +1192,17 @@ const CurrentRestaurant: React.FC = () => {
                       <div className="space-y-2">
                         <div className="flex justify-between text-gray-700">
                           <span>Subtotal:</span>
-                          <span className="font-semibold">₹{orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0)}</span>
+                          <span className="font-semibold">₹{getCartTotal()}</span>
                         </div>
                         <div className="flex justify-between text-gray-700">
                           <span>GST (5%):</span>
-                          <span className="font-semibold">₹{Math.round(orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0) * 0.05)}</span>
+                          <span className="font-semibold">₹{Math.round(getCartTotal() * 0.05)}</span>
                         </div>
                         <div className="border-t-2 border-orange-300 my-3"></div>
                         <div className="flex justify-between items-center">
                           <span className="text-2xl font-bold text-gray-900">Grand Total:</span>
                           <span className="text-3xl font-bold text-orange-600">
-                            ₹{orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0) + Math.round(orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0) * 0.05)}
+                            ₹{getCartTotal() + Math.round(getCartTotal() * 0.05)}
                           </span>
                         </div>
                       </div>
@@ -1358,7 +1445,6 @@ const CurrentRestaurant: React.FC = () => {
                   setShowFeedback(false);
                   setShowMenu(false);
                   setShowBill(false);
-                  setOrderedItems([]);
                   setShowScanPrompt(true);
                 }}
                 className="flex-1 px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition"
@@ -1548,7 +1634,7 @@ const CurrentRestaurant: React.FC = () => {
                 <span>Select Payment Method</span>
               </h3>
               <p className="text-green-100 mt-2">
-                Total Amount: ₹{orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0) + Math.round(orderedItems.reduce((total, item) => total + (item.price * item.quantity), 0) * 0.05)}
+                Total Amount: ₹{getCartTotal() + Math.round(getCartTotal() * 0.05)}
               </p>
             </div>
 

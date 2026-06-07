@@ -1,14 +1,18 @@
+export type MenuAvailableStatus = 'available' | 'not_available';
+
 export interface MenuItemRow {
   id?: number;
   name: string;
   amount: number;
   image?: string | null;
+  available_status?: MenuAvailableStatus;
 }
 
 export interface MenuCategoryRow {
   id?: number;
   title: string;
   items: MenuItemRow[];
+  available_status?: MenuAvailableStatus;
 }
 
 export interface RestaurantThaliRow {

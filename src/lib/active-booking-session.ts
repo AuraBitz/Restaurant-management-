@@ -9,6 +9,9 @@ export interface ActiveBookingSession {
   bookingTime: string;
   personsCount: number;
   floorId?: string;
+  customerId?: number;
+  tableId?: number;
+  activeOrderId?: number;
 }
 
 const STORAGE_KEY = 'tablemate_active_booking';
@@ -27,6 +30,16 @@ export function getActiveBookingSession(): ActiveBookingSession | null {
   } catch {
     return null;
   }
+}
+
+export function patchActiveBookingSession(
+  patch: Partial<ActiveBookingSession>
+): ActiveBookingSession | null {
+  const current = getActiveBookingSession();
+  if (!current) return null;
+  const next = { ...current, ...patch };
+  saveActiveBookingSession(next);
+  return next;
 }
 
 export function clearActiveBookingSession(): void {

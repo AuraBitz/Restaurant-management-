@@ -21,6 +21,7 @@ export interface RestaurantBookingRow {
   booking_status: string;
   persons_count: number;
   table_id?: number | null;
+  customer_id?: number | null;
   table_number?: string | null;
   restaurant_name?: string | null;
 }
@@ -38,6 +39,7 @@ export const createPublicBooking = async (
     url: '/public/restaurant-booking-master',
     data: {
       booking_status: 'confirmed',
+      is_manual_booking: false,
       ...payload,
     },
     messageSettings: { hideSuccessMessage: true },
@@ -48,4 +50,15 @@ export const createPublicBooking = async (
   }
 
   return response.data;
+};
+
+export const getPublicBookingById = async (
+  bookingId: number
+): Promise<RestaurantBookingRow | null> => {
+  const response = (await Http.get({
+    url: `/public/restaurant-booking-master/${bookingId}`,
+    messageSettings: { hideSuccessMessage: true, hideErrorMessage: true },
+  })) as BackendItemResponse<RestaurantBookingRow>;
+
+  return response?.data ?? null;
 };

@@ -19,6 +19,8 @@ interface LiveFloorCanvasProps {
   hereTableIds?: string[];
   /** width = fill width; contain = fit entire floor in box without scroll */
   fitMode?: 'width' | 'contain';
+  /** Hide admin-disabled tables from the floor plan */
+  hideDisabledTables?: boolean;
   className?: string;
 }
 
@@ -145,6 +147,7 @@ function FloorCanvasInner({
   hereTableIds,
   readOnly,
   onTableSelect,
+  visibleTables,
 }: {
   floor: LiveFloorState;
   width: number;
@@ -155,6 +158,7 @@ function FloorCanvasInner({
   hereTableIds: string[];
   readOnly: boolean;
   onTableSelect: (table: LiveCanvasTable) => void;
+  visibleTables: LiveCanvasTable[];
 }) {
   return (
     <div
@@ -176,7 +180,7 @@ function FloorCanvasInner({
       />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_30%,rgba(0,0,0,0.28)_100%)]" />
 
-      {floor.tables.map((table) => (
+      {visibleTables.map((table) => (
         <TableNode
           key={table.id}
           table={table}
@@ -191,7 +195,7 @@ function FloorCanvasInner({
         <LooseChair key={chair.id} chair={chair} />
       ))}
 
-      {floor.tables.length === 0 ? (
+      {visibleTables.length === 0 ? (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="rounded-2xl border border-white/10 bg-black/40 px-6 py-4 text-center text-white/90 backdrop-blur-md">
             No tables on this floor yet
@@ -209,12 +213,16 @@ const LiveFloorCanvas: React.FC<LiveFloorCanvasProps> = ({
   readOnly = false,
   hereTableIds = [],
   fitMode = 'width',
+  hideDisabledTables = true,
   className = '',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const design = FLOOR_DESIGNS[floor.floorDesign ?? 'wood'];
-  const { width, height } = floorCanvasSize(floor);
+  const visibleTables = hideDisabledTables
+    ? floor.tables.filter((table) => !table.isDisabled)
+    : floor.tables;
+  const { width, height } = floorCanvasSize({ ...floor, tables: visibleTables });
 
   useEffect(() => {
     const node = containerRef.current;
@@ -258,6 +266,7 @@ const LiveFloorCanvas: React.FC<LiveFloorCanvasProps> = ({
       hereTableIds={hereTableIds}
       readOnly={readOnly}
       onTableSelect={onTableSelect}
+      visibleTables={visibleTables}
     />
   );
 

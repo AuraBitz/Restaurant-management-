@@ -3,6 +3,7 @@ import Home from "../../pages/Home";
 import Restaurants from "../../pages/find-restaurants/Restaurants";
 import RestaurantDetail from "../../pages/restaurant-detail/RestaurantDetail";
 import CurrentRestaurant from "../../pages/current-restaurant/CurrentRestaurant";
+import ScanLanding from "../../pages/scan/ScanLanding";
 
 export const routes: RouteConfig[] = [
   {
@@ -30,6 +31,13 @@ export const routes: RouteConfig[] = [
     path: '/current-restaurant',
     key: 'current-restaurant',
     element: CurrentRestaurant,
+    islayout: false,
+    isProtected: false,
+  },
+  {
+    path: '/scan',
+    key: 'scan',
+    element: ScanLanding,
     islayout: false,
     isProtected: false,
   },

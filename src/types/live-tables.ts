@@ -31,6 +31,7 @@ export interface LiveCanvasTable {
   sizeW?: number;
   sizeH?: number;
   chairSlots?: TableChairSlot[];
+  isDisabled?: boolean;
 }
 
 export interface LiveCanvasChair {

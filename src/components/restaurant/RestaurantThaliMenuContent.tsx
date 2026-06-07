@@ -1,15 +1,26 @@
 import React, { useEffect, useState } from 'react';
-import { countThaliItems, parseMenuCategories, thaliCoverImage } from '../../lib/menu-utils';
+import { encodeMenuOrderItemId } from '../../lib/menu-order-item-id';
+import { countThaliItems, isMenuItemAvailable, parseMenuCategories, thaliCoverImage, withCategoryAvailability } from '../../lib/menu-utils';
 import { getPublicRestaurantMenus } from '../../services/api/menu.api';
-import type { MenuItemRow, RestaurantThaliRow } from '../../types/menu';
+import type { MenuCategoryRow, MenuItemRow, RestaurantThaliRow } from '../../types/menu';
 
 interface RestaurantThaliMenuContentProps {
   restaurantId: number;
-  onAddToCart: (item: { name: string; price: number; veg: boolean; image?: string }) => void;
+  orderBusy?: boolean;
+  orderLocked?: boolean;
+  onAddToCart: (item: {
+    id: number;
+    name: string;
+    price: number;
+    veg: boolean;
+    image?: string;
+  }) => void;
 }
 
 const RestaurantThaliMenuContent: React.FC<RestaurantThaliMenuContentProps> = ({
   restaurantId,
+  orderBusy = false,
+  orderLocked = false,
   onAddToCart,
 }) => {
   const [thalis, setThalis] = useState<RestaurantThaliRow[]>([]);
@@ -24,8 +35,12 @@ const RestaurantThaliMenuContent: React.FC<RestaurantThaliMenuContentProps> = ({
       .finally(() => setLoading(false));
   }, [restaurantId]);
 
-  const handleAddItem = (item: MenuItemRow) => {
+  const handleAddItem = (item: MenuItemRow, category: MenuCategoryRow) => {
+    if (!selectedThali?.id) return;
+    if (!isMenuItemAvailable(item, category)) return;
+    if (item.id == null || category.id == null) return;
     onAddToCart({
+      id: encodeMenuOrderItemId(selectedThali.id, category.id, item.id),
       name: item.name,
       price: item.amount,
       veg: true,
@@ -125,16 +140,24 @@ const RestaurantThaliMenuContent: React.FC<RestaurantThaliMenuContentProps> = ({
         {categories.length === 0 ? (
           <p className="text-center text-gray-500 py-10">No dishes in this thali yet.</p>
         ) : (
-          categories.map((category) => (
+          categories.map((category) => {
+            const resolved = withCategoryAvailability(category);
+            return (
             <section key={`${category.id ?? category.title}`}>
               <h4 className="mb-4 border-b-2 border-orange-400 pb-2 text-xl font-bold text-gray-800">
                 {category.title}
               </h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(category.items ?? []).map((item) => (
+                {(resolved.items ?? []).map((item) => {
+                  const available = isMenuItemAvailable(item, category);
+                  return (
                   <div
                     key={`${item.id ?? item.name}`}
-                    className="flex gap-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm transition hover:shadow-md"
+                    className={`flex gap-4 rounded-xl border bg-white p-4 shadow-sm transition ${
+                      available
+                        ? 'border-gray-200 hover:shadow-md'
+                        : 'border-red-200 bg-red-50/40 opacity-80'
+                    }`}
                   >
                     <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-orange-50">
                       {item.image ? (
@@ -149,20 +172,36 @@ const RestaurantThaliMenuContent: React.FC<RestaurantThaliMenuContentProps> = ({
                           <h5 className="font-bold text-gray-900">{item.name}</h5>
                           <span className="shrink-0 font-bold text-orange-600">₹{item.amount}</span>
                         </div>
+                        {!available ? (
+                          <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-red-600">
+                            Not available
+                          </p>
+                        ) : null}
                       </div>
                       <button
                         type="button"
-                        onClick={() => handleAddItem(item)}
-                        className="mt-2 w-full rounded-lg bg-orange-600 py-2 text-sm font-semibold text-white hover:bg-orange-700 transition"
+                        disabled={!available || orderBusy || orderLocked}
+                        onClick={() => handleAddItem(item, category)}
+                        className={`mt-2 w-full rounded-lg py-2 text-sm font-semibold transition ${
+                          available && !orderBusy && !orderLocked
+                            ? 'bg-orange-600 text-white hover:bg-orange-700'
+                            : 'cursor-not-allowed bg-gray-300 text-gray-500'
+                        }`}
                       >
-                        Add to Cart
+                        {orderLocked
+                          ? 'Order submitted'
+                          : orderBusy
+                          ? 'Adding…'
+                          : available
+                          ? 'Add'
+                          : 'Unavailable'}
                       </button>
                     </div>
                   </div>
-                ))}
+                );})}
               </div>
             </section>
-          ))
+          );})
         )}
       </div>
     </div>

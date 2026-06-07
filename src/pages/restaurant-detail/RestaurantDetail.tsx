@@ -137,12 +137,15 @@ const RestaurantDetail: React.FC = () => {
     try {
       const bookingIds: number[] = [];
       const tableLabels: string[] = [];
+      let sessionCustomerId: number | undefined;
+      let sessionTableId: number | undefined;
 
       for (const canvasId of selectedTableIds) {
         const table = getTableById(canvasId);
         if (!table) continue;
 
         tableLabels.push(table.label);
+        const masterTableId = resolveBookingTableId(table);
         const created = await createPublicBooking({
           restaurant_id: Number(id),
           customer_name: bookingData.customerName.trim(),
@@ -150,10 +153,16 @@ const RestaurantDetail: React.FC = () => {
           booking_date: bookingData.date,
           booking_time: bookingData.time,
           persons_count: bookingData.persons,
-          table_id: resolveBookingTableId(table),
+          table_id: masterTableId,
           booking_status: 'confirmed',
         });
         bookingIds.push(created.id);
+        if (sessionTableId == null && masterTableId) {
+          sessionTableId = masterTableId;
+        }
+        if (sessionCustomerId == null && created.customer_id) {
+          sessionCustomerId = created.customer_id;
+        }
       }
 
       if (bookingIds.length === 0) {
@@ -173,6 +182,8 @@ const RestaurantDetail: React.FC = () => {
         bookingTime: bookingData.time,
         personsCount: bookingData.persons,
         floorId: activeFloor?.id,
+        customerId: sessionCustomerId,
+        tableId: sessionTableId,
       });
 
       toast.success('Booking confirmed! Opening your restaurant...', {
@@ -197,8 +208,10 @@ const RestaurantDetail: React.FC = () => {
     }
   };
 
-  const availableTables = canvasTables.filter((t) => t.status === 'free').length;
-  const totalTables = canvasTables.length;
+  const availableTables = canvasTables.filter(
+    (t) => t.status === 'free' && !t.isDisabled
+  ).length;
+  const totalTables = canvasTables.filter((t) => !t.isDisabled).length;
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
